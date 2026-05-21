@@ -1,16 +1,16 @@
 # Slack Digest Agent
 
-AI-powered daily Slack digest. Scans your channels, scores messages against configurable themes using local embeddings, and sends a prioritized summary via DM.
+AI-powered daily Slack digest. Scans your workspace channels, scores messages against configurable themes using local embeddings, and sends a prioritized summary via DM.
 
 ## How it works
 
-1. **List channels** — fetches public channels you're a member of (uses your Slack user token)
-2. **Pre-filter channels** — embeds channel names/topics against your themes, picks the most relevant ones
-3. **Fetch messages** — reads recent messages since the last digest
-4. **Score messages** — local embedding model (all-MiniLM-L6-v2) scores each message by semantic similarity to your themes, weighted by priority, reactions, replies, and tracked authors
-5. **Fetch threads** — expands important threads with many replies
-6. **Synthesize** — sends the top scored messages to Claude for synthesis into a structured digest
-7. **Send DM** — posts the digest to you in Slack with priority indicators and "View" buttons linking to source messages
+1. **Scan channels (weekly)** — fetches all public channels, reads last 20 messages from each to understand what the channel is about, embeds the descriptions, and caches everything locally. Subsequent scans are incremental — only new channels are fetched.
+2. **Rank channels** — scores cached channel embeddings against your themes to pick the top 200 most relevant. Changes to themes take effect immediately without rescanning.
+3. **Fetch messages** — reads messages from ranked channels since the last digest (not a fixed window — covers Friday to Monday after a weekend off).
+4. **Score messages** — embeds messages locally, scores by semantic similarity to themes. Engagement (reactions, replies) acts as a multiplier, not an additive bonus — a popular off-topic message scores zero. Thread starters get a boost over standalone messages.
+5. **Fetch threads** — expands the top 15 highest-scoring messages that have replies.
+6. **Synthesize** — sends scored messages to Claude for synthesis into a structured digest with thematic sections.
+7. **Send DM** — posts the digest with priority indicators and "View" buttons linking directly to source messages.
 
 ## Setup
 
@@ -36,6 +36,7 @@ Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with:
 - `/digest-config` — View or update settings
 - `/digest-themes` — Manage themes
 - `/digest-people` — Manage tracked people
+- `/digest-rescan` — Rescan all channels and refresh the cache
 
 ### Install
 
@@ -68,7 +69,7 @@ source .envrc
 .venv/bin/slack-digest
 ```
 
-The embedding model (~80MB) downloads on first run. After that, startup takes a few seconds.
+The embedding model (~80MB) downloads on first run. The first channel scan takes a few minutes (fetches sample messages from all channels). After that, startup is fast — cached embeddings load from disk.
 
 ## Configuration
 
@@ -80,7 +81,7 @@ digest:
     - "09:30"
     - "18:00"
   timezone: Europe/Rome
-  lookback_hours: 24  # fallback for first run
+  lookback_hours: 24  # fallback for first run only
 
 themes:
   - name: Incidents
@@ -109,40 +110,52 @@ Themes use semantic matching, not exact keywords. A message about "VPC peering f
 
 Priority levels affect ranking: `critical` (1.5x), `high` (1.25x), `medium` (1.0x), `low` (0.75x).
 
+### Scoring
+
+Message scores are multiplicative: `similarity × engagement`. This means:
+- A popular off-topic message scores **zero** (no theme relevance = no score, regardless of reactions)
+- A relevant message with high engagement ranks above an equally relevant quiet one
+- Messages from tracked people always appear regardless of theme match
+
+Engagement factors: reactions, reply count, thread-starter bonus, message length.
+
 ### Slash commands
 
-- `/digest-now` — trigger immediately (uses last-run timestamp as lookback)
+- `/digest-now` — trigger immediately (covers since last digest)
 - `/digest-now 8` — digest for the last 8 hours (fixed window)
 - `/digest-config` — show current settings
 - `/digest-config schedule 08:00` — change schedule
 - `/digest-themes` — list themes
 - `/digest-themes add "Security" alert,CVE,vulnerability high` — add a theme
 - `/digest-people add @someone reason` — track a person
+- `/digest-rescan` — rescan all channels and refresh embeddings cache
 
 ## Architecture
 
 ```
-Slack API (user token)          Slack API (bot token)
-       │                               ▲
-       ▼                               │
-  List channels                    Send DM
-       │                               ▲
-       ▼                               │
-  Rank by theme ◄── Embeddings    Format blocks
-  (local model)     (all-MiniLM)       ▲
-       │                               │
-       ▼                               │
-  Fetch messages                  Claude API
-       │                          (synthesis)
-       ▼                               ▲
-  Score messages ◄── Embeddings        │
-  (local model)     (all-MiniLM)       │
-       │                               │
-       ▼                               │
-  Top 80 messages ──────────────────────┘
+Weekly scan (cached)                 Daily digest
+─────────────────                    ─────────────
+                                     
+Slack API: list all channels         Load cached embeddings
+       │                                    │
+       ▼                                    ▼
+Fetch last 20 messages              Rank by themes (matrix multiply)
+from each channel                          │
+       │                                    ▼
+       ▼                             Fetch messages (Slack API)
+Embed name + topic +                       │
+messages (local model)                      ▼
+       │                             Score messages (local embed)
+       ▼                                    │
+Cache to disk ──────────────────────        ▼
+(.channel_cache.json +               Top 80 → Claude API
+ .channel_embeddings.npy)                   │
+                                            ▼
+                                     Send DM (bot token)
+                                     with "View" buttons
 ```
 
-All embedding runs locally on your machine (no API calls). The only external API call per digest is Claude for synthesis.
+All embeddings run locally on your machine. The only paid API call per digest is Claude for synthesis.
 
 ## Costs
 
