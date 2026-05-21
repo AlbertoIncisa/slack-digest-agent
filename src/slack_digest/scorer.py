@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 SIMILARITY_THRESHOLD = 0.25
 TOP_N = 80
 REACTION_WEIGHT = 0.05
-REPLY_WEIGHT = 0.03
 TRACKED_AUTHOR_BONUS = 0.15
 LENGTH_BONUS_THRESHOLD = 100
 
@@ -88,9 +87,11 @@ class MessageScorer:
                     weighted = raw_sim * PRIORITY_MULTIPLIER.get(priority, 1.0)
                     max_similarity = max(max_similarity, weighted)
 
+            reply_count = msg.get("reply_count", 0)
             engagement = 1.0
             engagement += min(sum(r.get("count", 0) for r in msg.get("reactions", [])) * REACTION_WEIGHT, 0.3)
-            engagement += min(msg.get("reply_count", 0) * REPLY_WEIGHT, 0.2)
+            if reply_count > 0:
+                engagement += 0.1 + min(reply_count * 0.01, 0.1)
             if len(msg.get("text", "")) > LENGTH_BONUS_THRESHOLD:
                 engagement += 0.05
 
