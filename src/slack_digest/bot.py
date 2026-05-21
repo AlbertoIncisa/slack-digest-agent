@@ -34,6 +34,7 @@ def create_app(
     web_client: WebClient,
     scheduler: DigestScheduler,
     run_digest: Callable,
+    reader_client: WebClient | None = None,
 ) -> App:
     app = App(token=web_client.token)
 
@@ -198,6 +199,24 @@ def create_app(
                 run_digest(fixed_lookback_hours=hours)
             except Exception:
                 logger.exception("On-demand digest generation failed")
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+
+    @app.command("/digest-rescan")
+    def handle_rescan(ack, respond, command):
+        ack()
+        respond(text="Rescanning all channels... This may take a minute.")
+
+        def _run():
+            try:
+                from slack_digest.main import scan_and_cache_channels, CHANNEL_CACHE_FILE
+                import json
+                scan_and_cache_channels(reader_client or web_client, get_config())
+                total = len(json.loads(CHANNEL_CACHE_FILE.read_text())["channels"])
+                respond(text=f"Done — scanned and cached {total} channels.")
+            except Exception:
+                logger.exception("Channel rescan failed")
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()

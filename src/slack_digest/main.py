@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
 import sys
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
@@ -56,25 +58,58 @@ def _resolve_target_user(config: DigestConfig, client: WebClient) -> DigestConfi
     return config
 
 
-MAX_CHANNELS = 100
+MAX_CHANNELS = 200
 CHANNEL_RELEVANCE_THRESHOLD = 0.2
+CHANNEL_CACHE_FILE = Path(__file__).resolve().parent.parent.parent / ".channel_cache.json"
+CHANNEL_CACHE_MAX_AGE_DAYS = 7
 
 
-def _rank_channels_by_relevance(channels: list[dict], config: DigestConfig) -> list[dict]:
+
+CHANNEL_EMBEDDINGS_FILE = Path(__file__).resolve().parent.parent.parent / ".channel_embeddings.npy"
+
+
+def scan_and_cache_channels(client: WebClient, config: DigestConfig) -> list[dict]:
     from slack_digest.scorer import _get_model
 
+    logger.info("Scanning all public channels (weekly refresh)...")
+    all_channels = get_all_public_channels(client)
+    logger.info(f"Found {len(all_channels)} public channels — embedding...")
+
+    model = _get_model()
+    channel_texts = [f"{ch['name']} {ch.get('topic', '')} {ch.get('purpose', '')}".strip() for ch in all_channels]
+    embeddings = model.encode(channel_texts, normalize_embeddings=True)
+
+    cache = {
+        "scanned_at": datetime.now().isoformat(),
+        "channels": all_channels,
+    }
+    try:
+        CHANNEL_CACHE_FILE.write_text(json.dumps(cache, indent=2))
+        import numpy as np
+        np.save(CHANNEL_EMBEDDINGS_FILE, embeddings)
+        logger.info(f"Cached {len(all_channels)} channels + embeddings")
+    except OSError:
+        logger.warning("Could not write channel cache")
+
+    return _select_top_channels(all_channels, embeddings, config)
+
+
+def _select_top_channels(channels: list[dict], channel_embeddings, config: DigestConfig) -> list[dict]:
+    from slack_digest.scorer import _get_model
+
+    excluded = set(config.exclude_channels)
+
     if not config.themes:
-        return channels[:MAX_CHANNELS]
+        return [ch for ch in channels if ch["name"] not in excluded][:MAX_CHANNELS]
 
     model = _get_model()
     theme_texts = [f"{t.name}: {', '.join(t.keywords)}" for t in config.themes]
     theme_embeddings = model.encode(theme_texts, normalize_embeddings=True)
 
-    channel_texts = [f"{ch['name']} {ch.get('topic', '')} {ch.get('purpose', '')}".strip() for ch in channels]
-    channel_embeddings = model.encode(channel_texts, normalize_embeddings=True)
-
     scored = []
     for i, ch in enumerate(channels):
+        if ch["name"] in excluded:
+            continue
         similarities = channel_embeddings[i] @ theme_embeddings.T
         best_score = float(similarities.max())
         if best_score >= CHANNEL_RELEVANCE_THRESHOLD:
@@ -87,22 +122,35 @@ def _rank_channels_by_relevance(channels: list[dict], config: DigestConfig) -> l
     return ranked
 
 
+def _load_cached_channels(config: DigestConfig) -> list[dict] | None:
+    try:
+        import numpy as np
+        cache = json.loads(CHANNEL_CACHE_FILE.read_text())
+        scanned_at = datetime.fromisoformat(cache["scanned_at"])
+        age = datetime.now() - scanned_at
+        if age.days >= CHANNEL_CACHE_MAX_AGE_DAYS:
+            logger.info(f"Channel cache is {age.days} days old — needs refresh")
+            return None
+        embeddings = np.load(CHANNEL_EMBEDDINGS_FILE)
+        channels = cache["channels"]
+        if len(embeddings) != len(channels):
+            logger.info("Cache/embeddings mismatch — needs refresh")
+            return None
+        logger.info(f"Using cached channels ({len(channels)} total, scanned {age.days}d ago)")
+        return _select_top_channels(channels, embeddings, config)
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _get_channels(client: WebClient, config: DigestConfig) -> list[dict]:
+    cached = _load_cached_channels(config)
+    if cached is not None:
+        return cached
+    return scan_and_cache_channels(client, config)
+
+
 def _fetch_all_messages(client: WebClient, config: DigestConfig, fixed_lookback_hours: int | None = None) -> tuple[list[dict], dict]:
-    logger.info("Fetching channel list...")
-    channels = get_all_public_channels(client)
-    logger.info(f"Found {len(channels)} public channels")
-    excluded = set(config.exclude_channels)
-    included = set(config.include_channels) if config.include_channels else None
-
-    filtered_channels = []
-    for ch in channels:
-        if ch["name"] in excluded:
-            continue
-        if included and ch["name"] not in included:
-            continue
-        filtered_channels.append(ch)
-
-    filtered_channels = _rank_channels_by_relevance(filtered_channels, config)
+    filtered_channels = _get_channels(client, config)
     logger.info(f"Scanning {len(filtered_channels)} channels")
 
     if fixed_lookback_hours:
@@ -229,7 +277,7 @@ def main() -> None:
     scheduler.start()
     logger.info(f"Scheduler started — digests at {', '.join(config.digest.schedule)}")
 
-    bolt_app = create_app(config, bot_client, scheduler, digest_callback)
+    bolt_app = create_app(config, bot_client, scheduler, digest_callback, reader_client)
     handler = SocketModeHandler(bolt_app, os.environ["SLACK_APP_TOKEN"])
 
     def shutdown(signum, frame):

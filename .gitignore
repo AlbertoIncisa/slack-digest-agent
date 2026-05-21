@@ -8,3 +8,5 @@ __pycache__/
 dist/
 build/
 config.yaml
+.channel_cache.json
+.channel_embeddings.npy

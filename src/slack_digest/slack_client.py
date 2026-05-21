@@ -40,8 +40,6 @@ def get_all_public_channels(client: WebClient) -> list[dict]:
             cursor=cursor,
         )
         for ch in response["channels"]:
-            if not ch.get("is_member", False):
-                continue
             channels.append(
                 {
                     "id": ch["id"],
