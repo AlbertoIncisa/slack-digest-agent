@@ -1,0 +1,32 @@
+digest:
+  schedule:
+    - "09:00"
+  timezone: Europe/Rome
+  lookback_hours: 24
+  max_messages_per_channel: 200
+
+target_user:
+  slack_id: null
+  email: you@example.com
+
+themes:
+  - name: Incidents
+    keywords: [incident, outage, downtime, P0, P1, SEV]
+    priority: critical
+  - name: Engineering
+    keywords: [deploy, PR, merge, architecture, refactor]
+    priority: medium
+
+people: []
+
+exclude_channels:
+  - random
+  - social
+  - watercooler
+
+include_channels: []
+
+agent:
+  model: claude-sonnet-4-6
+  max_budget_usd: 0.50
+  max_turns: 10

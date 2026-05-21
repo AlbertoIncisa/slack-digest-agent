@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.envrc
+.last_digest_run
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+config.yaml
