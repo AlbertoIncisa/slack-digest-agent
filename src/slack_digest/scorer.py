@@ -88,17 +88,18 @@ class MessageScorer:
                     weighted = raw_sim * PRIORITY_MULTIPLIER.get(priority, 1.0)
                     max_similarity = max(max_similarity, weighted)
 
-            reaction_score = min(
-                sum(r.get("count", 0) for r in msg.get("reactions", [])) * REACTION_WEIGHT,
-                0.3,
-            )
-            reply_score = min(msg.get("reply_count", 0) * REPLY_WEIGHT, 0.2)
-            author_bonus = TRACKED_AUTHOR_BONUS if msg.get("user") in self.tracked_user_ids else 0.0
-            length_bonus = 0.05 if len(msg.get("text", "")) > LENGTH_BONUS_THRESHOLD else 0.0
+            engagement = 1.0
+            engagement += min(sum(r.get("count", 0) for r in msg.get("reactions", [])) * REACTION_WEIGHT, 0.3)
+            engagement += min(msg.get("reply_count", 0) * REPLY_WEIGHT, 0.2)
+            if len(msg.get("text", "")) > LENGTH_BONUS_THRESHOLD:
+                engagement += 0.05
 
-            total = max_similarity + reaction_score + reply_score + author_bonus + length_bonus
+            is_tracked = msg.get("user") in self.tracked_user_ids
+            total = max_similarity * engagement
+            if is_tracked:
+                total = max(total, TRACKED_AUTHOR_BONUS)
 
-            if total > SIMILARITY_THRESHOLD or author_bonus > 0:
+            if total > SIMILARITY_THRESHOLD or is_tracked:
                 scored.append(ScoredMessage(
                     channel_name=msg.get("channel_name", ""),
                     channel_id=msg.get("channel_id", ""),

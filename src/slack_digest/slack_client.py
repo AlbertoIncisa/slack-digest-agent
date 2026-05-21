@@ -115,6 +115,24 @@ def get_thread_replies(client: WebClient, channel_id: str, thread_ts: str) -> li
     return replies
 
 
+@_retry_on_rate_limit
+def get_recent_message_texts(client: WebClient, channel_id: str, limit: int = 20) -> str:
+    try:
+        response = client.conversations_history(channel=channel_id, limit=limit)
+    except SlackApiError as e:
+        if e.response.get("error") in ("channel_not_found", "not_in_channel"):
+            return ""
+        raise
+    texts = []
+    for msg in response.get("messages", []):
+        if msg.get("subtype") in ("channel_join", "channel_leave", "bot_message"):
+            continue
+        text = msg.get("text", "").strip()
+        if text:
+            texts.append(text[:200])
+    return " ".join(texts)
+
+
 def get_user_info(client: WebClient, user_id: str) -> dict:
     if user_id in _user_cache:
         return _user_cache[user_id]
