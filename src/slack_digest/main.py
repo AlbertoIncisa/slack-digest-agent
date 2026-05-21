@@ -20,6 +20,7 @@ from slack_digest.scorer import MessageScorer
 from slack_digest.slack_client import (
     get_all_public_channels,
     get_channel_messages,
+    get_recent_message_texts,
     get_thread_replies,
     get_user_info,
     lookup_user_by_email,
@@ -66,32 +67,87 @@ CHANNEL_CACHE_MAX_AGE_DAYS = 7
 
 
 CHANNEL_EMBEDDINGS_FILE = Path(__file__).resolve().parent.parent.parent / ".channel_embeddings.npy"
+CHANNEL_SAMPLE_MESSAGES = 20
 
 
-def scan_and_cache_channels(client: WebClient, config: DigestConfig) -> list[dict]:
-    from slack_digest.scorer import _get_model
+def _build_channel_description(ch: dict, sample_text: str) -> str:
+    parts = [ch["name"], ch.get("topic", ""), ch.get("purpose", "")]
+    if sample_text:
+        parts.append(sample_text[:500])
+    return " ".join(p for p in parts if p).strip()
 
-    logger.info("Scanning all public channels (weekly refresh)...")
-    all_channels = get_all_public_channels(client)
-    logger.info(f"Found {len(all_channels)} public channels — embedding...")
 
-    model = _get_model()
-    channel_texts = [f"{ch['name']} {ch.get('topic', '')} {ch.get('purpose', '')}".strip() for ch in all_channels]
-    embeddings = model.encode(channel_texts, normalize_embeddings=True)
-
-    cache = {
-        "scanned_at": datetime.now().isoformat(),
-        "channels": all_channels,
-    }
+def _load_cache() -> tuple[list[dict], any, datetime | None]:
+    import numpy as np
     try:
+        cache = json.loads(CHANNEL_CACHE_FILE.read_text())
+        embeddings = np.load(CHANNEL_EMBEDDINGS_FILE)
+        channels = cache["channels"]
+        scanned_at = datetime.fromisoformat(cache["scanned_at"])
+        if len(embeddings) != len(channels):
+            return [], None, None
+        return channels, embeddings, scanned_at
+    except (OSError, ValueError, KeyError):
+        return [], None, None
+
+
+def _save_cache(channels: list[dict], embeddings) -> None:
+    import numpy as np
+    try:
+        cache = {"scanned_at": datetime.now().isoformat(), "channels": channels}
         CHANNEL_CACHE_FILE.write_text(json.dumps(cache, indent=2))
-        import numpy as np
         np.save(CHANNEL_EMBEDDINGS_FILE, embeddings)
-        logger.info(f"Cached {len(all_channels)} channels + embeddings")
     except OSError:
         logger.warning("Could not write channel cache")
 
-    return _select_top_channels(all_channels, embeddings, config)
+
+def scan_and_cache_channels(client: WebClient, config: DigestConfig) -> list[dict]:
+    import numpy as np
+    from slack_digest.scorer import _get_model
+
+    logger.info("Fetching channel list from Slack...")
+    live_channels = get_all_public_channels(client)
+    live_ids = {ch["id"] for ch in live_channels}
+    logger.info(f"Found {len(live_channels)} public channels")
+
+    cached_channels, cached_embeddings, _ = _load_cache()
+    cached_by_id = {ch["id"]: (i, ch) for i, ch in enumerate(cached_channels)}
+
+    new_channels = [ch for ch in live_channels if ch["id"] not in cached_by_id]
+    removed_ids = set(cached_by_id.keys()) - live_ids
+    kept_indices = [i for ch_id, (i, _) in cached_by_id.items() if ch_id not in removed_ids]
+
+    logger.info(f"Channels: {len(kept_indices)} existing, {len(new_channels)} new, {len(removed_ids)} removed")
+
+    model = _get_model()
+    embed_dim = model.get_sentence_embedding_dimension()
+
+    if new_channels:
+        logger.info(f"Fetching sample messages for {len(new_channels)} new channels...")
+        new_texts = []
+        for j, ch in enumerate(new_channels):
+            if (j + 1) % 50 == 0:
+                logger.info(f"  [{j + 1}/{len(new_channels)}]")
+            sample = get_recent_message_texts(client, ch["id"], CHANNEL_SAMPLE_MESSAGES)
+            new_texts.append(_build_channel_description(ch, sample))
+        new_embeddings = model.encode(new_texts, normalize_embeddings=True)
+    else:
+        new_embeddings = np.empty((0, embed_dim))
+
+    if cached_embeddings is not None and len(kept_indices) > 0:
+        kept_channels = [cached_channels[i] for i in kept_indices]
+        kept_embeddings = cached_embeddings[kept_indices]
+    else:
+        kept_channels = []
+        kept_embeddings = np.empty((0, embed_dim))
+
+    all_channels = kept_channels + new_channels
+    all_embeddings = np.vstack([kept_embeddings, new_embeddings]) if len(all_channels) > 0 else np.empty((0, embed_dim))
+
+    _save_cache(all_channels, all_embeddings)
+    logger.info(f"Cached {len(all_channels)} channels + embeddings")
+
+    return _select_top_channels(all_channels, all_embeddings, config)
 
 
 def _select_top_channels(channels: list[dict], channel_embeddings, config: DigestConfig) -> list[dict]:
@@ -122,30 +178,15 @@ def _select_top_channels(channels: list[dict], channel_embeddings, config: Diges
     return ranked
 
 
-def _load_cached_channels(config: DigestConfig) -> list[dict] | None:
-    try:
-        import numpy as np
-        cache = json.loads(CHANNEL_CACHE_FILE.read_text())
-        scanned_at = datetime.fromisoformat(cache["scanned_at"])
-        age = datetime.now() - scanned_at
-        if age.days >= CHANNEL_CACHE_MAX_AGE_DAYS:
-            logger.info(f"Channel cache is {age.days} days old — needs refresh")
-            return None
-        embeddings = np.load(CHANNEL_EMBEDDINGS_FILE)
-        channels = cache["channels"]
-        if len(embeddings) != len(channels):
-            logger.info("Cache/embeddings mismatch — needs refresh")
-            return None
-        logger.info(f"Using cached channels ({len(channels)} total, scanned {age.days}d ago)")
-        return _select_top_channels(channels, embeddings, config)
-    except (OSError, ValueError, KeyError):
-        return None
-
-
 def _get_channels(client: WebClient, config: DigestConfig) -> list[dict]:
-    cached = _load_cached_channels(config)
-    if cached is not None:
-        return cached
+    cached_channels, cached_embeddings, scanned_at = _load_cache()
+    if cached_embeddings is not None and scanned_at is not None:
+        age = datetime.now() - scanned_at
+        if age.days < CHANNEL_CACHE_MAX_AGE_DAYS:
+            logger.info(f"Using cached channels ({len(cached_channels)} total, scanned {age.days}d ago)")
+            return _select_top_channels(cached_channels, cached_embeddings, config)
+        else:
+            logger.info(f"Channel cache is {age.days} days old — refreshing")
     return scan_and_cache_channels(client, config)
 
 
