@@ -236,8 +236,12 @@ def _fetch_all_messages(client: WebClient, config: DigestConfig, fixed_lookback_
     return all_messages, stats
 
 
+MAX_THREAD_FETCHES = 15
+
+
 def _fetch_threads_for_top_messages(client: WebClient, scored_messages):
-    threads_to_fetch = [m for m in scored_messages if m.reply_count >= 3 and m.score >= 0.4]
+    with_replies = [m for m in scored_messages if m.reply_count > 0]
+    threads_to_fetch = sorted(with_replies, key=lambda m: m.score, reverse=True)[:MAX_THREAD_FETCHES]
     if threads_to_fetch:
         logger.info(f"Fetching {len(threads_to_fetch)} threads...")
     for msg in threads_to_fetch:
