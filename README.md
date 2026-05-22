@@ -25,18 +25,11 @@ AI-powered daily Slack digest. Scans your workspace channels, scores messages ag
 
 Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with:
 
-**Bot Token Scopes:** `chat:write`, `commands`, `users:read`, `users:read.email`
-
-**User Token Scopes:** `channels:history`, `channels:read`, `users:read`
-
-**Socket Mode:** Enabled (generates an app-level token starting with `xapp-`)
-
-**Slash Commands:**
-- `/digest-now` — Generate a digest immediately
-- `/digest-config` — View or update settings
-- `/digest-themes` — Manage themes
-- `/digest-people` — Manage tracked people
-- `/digest-rescan` — Rescan all channels and refresh the cache
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**
+2. Select your workspace, paste the contents of `slack-app-manifest.yaml`, and create
+3. Go to **Basic Information** → **App-Level Tokens** → generate a token with `connections:write` scope (this is your `SLACK_APP_TOKEN`)
+4. Go to **Install App** → install to your workspace
+5. Copy the **Bot User OAuth Token** (`xoxb-...`) and **User OAuth Token** (`xoxp-...`)
 
 ### Install
 
