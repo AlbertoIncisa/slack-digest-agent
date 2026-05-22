@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 LAST_RUN_FILE = Path(__file__).resolve().parent.parent.parent / ".last_digest_run"
 
+_last_run_memory: datetime | None = None
+
 
 class DigestScheduler:
     def __init__(self, callback: Callable, config: DigestConfig):
@@ -80,18 +82,22 @@ class DigestScheduler:
 
 
 def _save_last_run(tz: ZoneInfo | None = None) -> None:
+    global _last_run_memory
+    now = datetime.now(tz or ZoneInfo("UTC"))
+    _last_run_memory = now
     try:
-        now = datetime.now(tz or ZoneInfo("UTC"))
         LAST_RUN_FILE.write_text(now.isoformat())
     except OSError:
-        logger.warning("Could not save last run timestamp")
+        logger.warning("Could not save last run timestamp to disk (in-memory fallback active)")
 
 
 def _load_last_run() -> datetime | None:
+    global _last_run_memory
     try:
         dt = datetime.fromisoformat(LAST_RUN_FILE.read_text().strip())
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=ZoneInfo("UTC"))
+        _last_run_memory = dt
         return dt
     except (OSError, ValueError):
-        return None
+        return _last_run_memory

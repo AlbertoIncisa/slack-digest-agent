@@ -71,7 +71,7 @@ def create_app(
             if not re.match(r"^\d{2}:\d{2}$", value):
                 respond(text="Usage: `/digest-config schedule HH:MM`")
                 return
-            cfg.digest.schedule = value
+            cfg.digest.schedule = [value]
             save_config(cfg)
             scheduler.reschedule(cfg)
             respond(text=f"Digest schedule updated to `{value}`")
@@ -145,7 +145,7 @@ def create_app(
         if not text:
             cfg = get_config()
             if not cfg.people:
-                respond(text="No people configured. Use `/digest-people add <@user> <reason>`")
+                respond(text="No people configured. Use `/digest-people add @username [reason]`")
                 return
             lines = []
             for p in cfg.people:
@@ -157,15 +157,14 @@ def create_app(
         action = parts[0].lower()
 
         if action == "add" and len(parts) > 1:
-            # Format: add <@U01ABC123|name> "reason"
             match = re.match(r"^<@(\w+)(?:\|([^>]*))?>\s*(.*)?$", parts[1])
             if not match:
-                respond(text="Usage: `/digest-people add @username reason for tracking`")
+                respond(text="Usage: `/digest-people add @username [reason]`")
                 return
             slack_id = match.group(1)
             name = match.group(2) or slack_id
-            reason = match.group(3) or ""
-            add_person(Person(slack_id=slack_id, name=name, reason=reason.strip('"').strip()))
+            reason = (match.group(3) or "").strip().strip('"')
+            add_person(Person(slack_id=slack_id, name=name, reason=reason))
             respond(text=f"Added <@{slack_id}> to digest tracking")
 
         elif action == "remove" and len(parts) > 1:
@@ -173,9 +172,8 @@ def create_app(
             if not match:
                 respond(text="Usage: `/digest-people remove @username`")
                 return
-            slack_id = match.group(1)
-            remove_person(slack_id)
-            respond(text=f"Removed <@{slack_id}> from digest tracking")
+            remove_person(match.group(1))
+            respond(text=f"Removed <@{match.group(1)}> from digest tracking")
 
         else:
             respond(text="Usage: `/digest-people [add|remove] ...`")
