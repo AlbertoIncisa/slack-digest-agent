@@ -38,6 +38,10 @@ def create_app(
 ) -> App:
     app = App(token=web_client.token)
 
+    @app.action(re.compile(".*"))
+    def handle_button_click(ack, body):
+        ack()
+
     @app.command("/digest-config")
     def handle_config(ack, respond, command):
         ack()
