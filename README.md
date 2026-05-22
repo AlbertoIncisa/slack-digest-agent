@@ -21,15 +21,13 @@ AI-powered daily Slack digest. Scans your workspace channels, scores messages ag
 - A Slack app with Socket Mode enabled
 - An Anthropic API key
 
-### Slack app configuration
-
-Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) with:
+### Slack app setup
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**
-2. Select your workspace, paste the contents of `slack-app-manifest.yaml`, and create
-3. Go to **Basic Information** → **App-Level Tokens** → generate a token with `connections:write` scope (this is your `SLACK_APP_TOKEN`)
+2. Select your workspace, paste the contents of [`slack-app-manifest.yaml`](slack-app-manifest.yaml), and create
+3. Go to **Basic Information** → **App-Level Tokens** → generate a token with `connections:write` scope — this is your `SLACK_APP_TOKEN` (`xapp-...`)
 4. Go to **Install App** → install to your workspace
-5. Copy the **Bot User OAuth Token** (`xoxb-...`) and **User OAuth Token** (`xoxp-...`)
+5. Copy the **Bot User OAuth Token** (`xoxb-...`) and **User OAuth Token** (`xoxp-...`) from the **OAuth & Permissions** page
 
 ### Install
 
