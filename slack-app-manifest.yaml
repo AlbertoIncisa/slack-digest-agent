@@ -1,0 +1,48 @@
+display_information:
+  name: Slack Digest Agent
+  description: AI-powered daily digest of your most relevant Slack messages
+  background_color: "#1a1a2e"
+
+features:
+  bot_user:
+    display_name: Digest Bot
+    always_online: true
+  slash_commands:
+    - command: /digest-now
+      description: Generate a digest immediately
+      usage_hint: "[hours]"
+      should_escape: true
+    - command: /digest-config
+      description: View or update digest settings
+      usage_hint: "[schedule|lookback|timezone] [value]"
+      should_escape: true
+    - command: /digest-themes
+      description: Manage digest themes
+      usage_hint: "[add|remove] ..."
+      should_escape: true
+    - command: /digest-people
+      description: Manage tracked people
+      usage_hint: "[add|remove] @user [reason]"
+      should_escape: true
+    - command: /digest-rescan
+      description: Rescan all channels and refresh embeddings cache
+      should_escape: true
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - commands
+      - users:read
+      - users:read.email
+    user:
+      - channels:history
+      - channels:read
+      - users:read
+
+settings:
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
