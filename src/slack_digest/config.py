@@ -13,6 +13,7 @@ class Theme(BaseModel):
     name: str
     keywords: list[str] = Field(default_factory=list)
     priority: Literal["critical", "high", "medium", "low"] = "medium"
+    similarity_threshold: float | None = None
 
 
 class Person(BaseModel):
@@ -33,6 +34,17 @@ class TargetUser(BaseModel):
     email: str | None = None
 
 
+class ScoringConfig(BaseModel):
+    similarity_threshold: float = 0.25
+
+
+class TuningConfig(BaseModel):
+    auto_apply: bool = False
+    min_votes: int = 10
+    cooldown_days: int = 3
+    pain_threshold: float = 0.3
+
+
 class AgentConfig(BaseModel):
     model: str = "claude-sonnet-4-5-20250514"
     max_budget_usd: float = 0.50
@@ -46,6 +58,8 @@ class DigestConfig(BaseModel):
     people: list[Person] = Field(default_factory=list)
     exclude_channels: list[str] = Field(default_factory=list)
     include_channels: list[str] = Field(default_factory=list)
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
+    tuning: TuningConfig = Field(default_factory=TuningConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
 
 

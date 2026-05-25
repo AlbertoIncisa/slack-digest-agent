@@ -10,7 +10,8 @@ AI-powered daily Slack digest. Scans your workspace channels, scores messages ag
 4. **Score messages** — embeds messages locally, scores by semantic similarity to themes. Engagement (reactions, replies) acts as a multiplier, not an additive bonus — a popular off-topic message scores zero. Thread starters get a boost over standalone messages.
 5. **Fetch threads** — expands the top 15 highest-scoring messages that have replies.
 6. **Synthesize** — sends scored messages to Claude for synthesis into a structured digest with thematic sections.
-7. **Send DM** — posts the digest with priority indicators and "View" buttons linking directly to source messages.
+7. **Send DM** — posts the digest with priority indicators, thumbs up/down feedback buttons, and "View" buttons linking directly to source messages.
+8. **Learn** — accumulated feedback triggers Claude-based analysis that proposes theme and scoring adjustments. Themes get smarter over time without manual editing.
 
 ## Setup
 
@@ -110,6 +111,39 @@ Message scores are multiplicative: `similarity × engagement`. This means:
 
 Engagement factors: reactions, reply count, thread-starter bonus, message length.
 
+The global similarity threshold (default 0.25) can be overridden per theme:
+
+```yaml
+scoring:
+  similarity_threshold: 0.25
+
+themes:
+  - name: Incidents
+    keywords: [incident, outage, downtime]
+    priority: critical
+    similarity_threshold: 0.30  # stricter — this theme matched too broadly
+```
+
+### Feedback & auto-tuning
+
+Each digest item has thumbs up/down buttons. Votes are stored locally in SQLite (`~/.slack-digest/feedback.db`) and used to automatically improve theme configuration over time.
+
+When enough negative votes accumulate, the system sends your feedback to Claude for analysis and proposes changes — keyword additions/removals, priority adjustments, and per-theme similarity threshold tweaks. Proposals arrive as a DM with before/after diffs and Apply/Dismiss buttons.
+
+Auto-tuning triggers when all four conditions are met:
+1. At least 10 unprocessed votes (configurable)
+2. At least 3 days since the last tuning run
+3. More than 30% of votes are thumbs-down
+4. No pending proposal waiting for review
+
+```yaml
+tuning:
+  auto_apply: false   # if true, apply without asking
+  min_votes: 10
+  cooldown_days: 3
+  pain_threshold: 0.3
+```
+
 ### Slash commands
 
 - `/digest-now` — trigger immediately (covers since last digest)
@@ -120,6 +154,9 @@ Engagement factors: reactions, reply count, thread-starter bonus, message length
 - `/digest-themes add "Security" alert,CVE,vulnerability high` — add a theme
 - `/digest-people add @someone reason` — track a person
 - `/digest-rescan` — rescan all channels and refresh embeddings cache
+- `/digest-tune` — force a tuning analysis (skips vote/cooldown thresholds)
+- `/digest-tune history` — list recent tuning runs
+- `/digest-tune revert` — restore config from the last applied tuning run
 
 ## Architecture
 

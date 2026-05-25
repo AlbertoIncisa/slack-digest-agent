@@ -10,7 +10,6 @@ from slack_digest.config import DigestConfig
 
 logger = logging.getLogger(__name__)
 
-SIMILARITY_THRESHOLD = 0.25
 TOP_N = 80
 REACTION_WEIGHT = 0.05
 TRACKED_AUTHOR_BONUS = 0.15
@@ -54,6 +53,7 @@ class MessageScorer:
     def __init__(self, config: DigestConfig):
         self.model = _get_model()
         self.tracked_user_ids = {p.slack_id for p in config.people}
+        self.global_threshold = config.scoring.similarity_threshold
 
         theme_texts = [f"{t.name}: {', '.join(t.keywords)}" for t in config.themes]
         if theme_texts:
@@ -62,6 +62,9 @@ class MessageScorer:
             self.theme_embeddings = np.array([])
         self.theme_names = [t.name for t in config.themes]
         self.theme_priorities = {t.name: t.priority for t in config.themes}
+        self.theme_thresholds = {
+            t.name: t.similarity_threshold for t in config.themes if t.similarity_threshold is not None
+        }
 
         logger.info(f"Scorer ready — {len(self.theme_names)} themes embedded")
 
@@ -81,9 +84,11 @@ class MessageScorer:
                 similarities = msg_embeddings[i] @ self.theme_embeddings.T
                 for j, sim in enumerate(similarities):
                     raw_sim = float(sim)
-                    if raw_sim > SIMILARITY_THRESHOLD:
-                        theme_scores.append((self.theme_names[j], raw_sim))
-                    priority = self.theme_priorities.get(self.theme_names[j], "medium")
+                    theme_name = self.theme_names[j]
+                    threshold = self.theme_thresholds.get(theme_name, self.global_threshold)
+                    if raw_sim > threshold:
+                        theme_scores.append((theme_name, raw_sim))
+                    priority = self.theme_priorities.get(theme_name, "medium")
                     weighted = raw_sim * PRIORITY_MULTIPLIER.get(priority, 1.0)
                     max_similarity = max(max_similarity, weighted)
 
@@ -100,7 +105,7 @@ class MessageScorer:
             if is_tracked:
                 total = max(total, TRACKED_AUTHOR_BONUS)
 
-            if total > SIMILARITY_THRESHOLD or is_tracked:
+            if total > self.global_threshold or is_tracked:
                 scored.append(ScoredMessage(
                     channel_name=msg.get("channel_name", ""),
                     channel_id=msg.get("channel_id", ""),

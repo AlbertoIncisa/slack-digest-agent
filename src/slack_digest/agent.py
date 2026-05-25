@@ -103,8 +103,17 @@ def generate_digest(
     user_prompt = _format_messages_for_prompt(scored_messages, stats)
 
     message_links = {}
+    source_by_message_id = {}
     for idx, msg in enumerate(scored_messages):
-        message_links[f"msg_{idx}"] = _build_permalink(workspace_url, msg.channel_id, msg.ts)
+        key = f"msg_{idx}"
+        message_links[key] = _build_permalink(workspace_url, msg.channel_id, msg.ts)
+        source_by_message_id[key] = {
+            "themes": [{"name": name, "score": score} for name, score in msg.matched_themes],
+            "score": msg.score,
+            "raw_text": msg.text,
+            "channel_id": msg.channel_id,
+            "ts": msg.ts,
+        }
 
     client = anthropic.Anthropic()
     response = client.messages.create(
@@ -118,6 +127,7 @@ def generate_digest(
     logger.info(f"Digest generated — {len(result_text)} chars")
     digest = _parse_digest_json(result_text)
     digest["_message_links"] = message_links
+    digest["_source_by_message_id"] = source_by_message_id
     return digest
 
 
@@ -159,18 +169,18 @@ def _parse_digest_json(text: str) -> dict:
     }
 
 
-def format_digest_blocks(digest: dict) -> list[dict]:
+BLOCKS_PER_MESSAGE = 50
+OVERHEAD_BLOCKS = 4
+ITEMS_PER_MESSAGE = (BLOCKS_PER_MESSAGE - OVERHEAD_BLOCKS) // 2
+
+
+def format_digest_blocks(digest: dict, digest_run_id: str, label: str = "Daily Digest") -> list[list[dict]]:
+    from slack_digest.feedback import save_digest_item
+
     message_links = digest.pop("_message_links", {})
+    source_map = digest.pop("_source_by_message_id", {})
     today_str = datetime.now(timezone.utc).strftime("%A, %B %d")
-    blocks: list[dict] = []
-
-    blocks.append({"type": "header", "text": {"type": "plain_text", "text": f"Daily Digest — {today_str}"}})
-
-    one_liner = digest.get("one_liner", "")
-    if one_liner:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*TL;DR:* {one_liner}"}})
-
-    blocks.append({"type": "divider"})
+    digest_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     priority_indicator = {
         "critical": ":red_circle:",
@@ -179,26 +189,69 @@ def format_digest_blocks(digest: dict) -> list[dict]:
         "low": ":white_circle:",
     }
 
-    for section in digest.get("sections", []):
-        indicator = priority_indicator.get(section.get("priority", "medium"), ":white_circle:")
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"{indicator} *{section['title']}*"}})
+    # Each item_group is a list of blocks that must stay in the same message
+    # (section text + actions buttons, or a section header, or a divider).
+    item_groups: list[list[dict]] = []
 
-        for item in section.get("items", []):
+    for section_idx, section in enumerate(digest.get("sections", [])):
+        indicator = priority_indicator.get(section.get("priority", "medium"), ":white_circle:")
+        item_groups.append([{"type": "section", "text": {"type": "mrkdwn", "text": f"{indicator} *{section['title']}*"}}])
+
+        for item_idx, item in enumerate(section.get("items", [])):
+            feedback_id = f"{digest_run_id}_{section_idx}_{item_idx}"
+            msg_id = item.get("message_id", "")
+            link = message_links.get(msg_id)
+            source = source_map.get(msg_id, {})
+
+            save_digest_item(
+                feedback_id=feedback_id,
+                digest_run_id=digest_run_id,
+                digest_date=digest_date,
+                section=section.get("title", ""),
+                channel=item.get("channel", ""),
+                author=item.get("author", ""),
+                summary=item.get("summary", ""),
+                relevance=item.get("relevance"),
+                themes=source.get("themes"),
+                score=source.get("score"),
+                raw_text=source.get("raw_text"),
+            )
+
             author_part = f" — _{item['author']}_" if item.get("author") else ""
             relevance_part = f"\n>{item['relevance']}" if item.get("relevance") else ""
             text = f"*{item.get('channel', '')}*{author_part}\n{item.get('summary', '')}{relevance_part}"
-            block = {"type": "section", "text": {"type": "mrkdwn", "text": text}}
-            msg_id = item.get("message_id", "")
-            link = message_links.get(msg_id)
+            section_block = {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+
+            actions_elements = [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": ":+1:"},
+                    "action_id": "feedback_up",
+                    "value": feedback_id,
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": ":-1:"},
+                    "action_id": "feedback_down",
+                    "value": feedback_id,
+                },
+            ]
             if link:
-                block["accessory"] = {
+                actions_elements.append({
                     "type": "button",
                     "text": {"type": "plain_text", "text": "View"},
                     "url": link,
-                }
-            blocks.append(block)
+                    "action_id": f"view_{feedback_id}",
+                })
+            actions_block = {
+                "type": "actions",
+                "block_id": f"feedback_actions_{feedback_id}",
+                "elements": actions_elements,
+            }
 
-        blocks.append({"type": "divider"})
+            item_groups.append([section_block, actions_block])
+
+        item_groups.append([{"type": "divider"}])
 
     stats = digest.get("stats", {})
     footer = {
@@ -215,8 +268,49 @@ def format_digest_blocks(digest: dict) -> list[dict]:
         ],
     }
 
-    if len(blocks) >= MAX_BLOCKS:
-        blocks = blocks[: MAX_BLOCKS - 1]
-    blocks.append(footer)
+    one_liner = digest.get("one_liner", "")
+    max_body_blocks = BLOCKS_PER_MESSAGE - OVERHEAD_BLOCKS
 
-    return blocks
+    chunks: list[list[list[dict]]] = []
+    current_chunk: list[list[dict]] = []
+    current_count = 0
+    for group in item_groups:
+        group_size = len(group)
+        if current_count + group_size > max_body_blocks and current_chunk:
+            chunks.append(current_chunk)
+            current_chunk = []
+            current_count = 0
+        current_chunk.append(group)
+        current_count += group_size
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    if not chunks:
+        chunks = [[]]
+
+    all_messages: list[list[dict]] = []
+    total = len(chunks)
+
+    for page_idx, chunk in enumerate(chunks):
+        blocks: list[dict] = []
+        if page_idx == 0:
+            blocks.append({"type": "header", "text": {"type": "plain_text", "text": f"{label} — {today_str}"}})
+            if one_liner:
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*TL;DR:* {one_liner}"}})
+            blocks.append({"type": "divider"})
+        elif total > 1:
+            blocks.append({
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"{label} ({page_idx + 1}/{total}) — {today_str}"},
+            })
+            blocks.append({"type": "divider"})
+
+        for group in chunk:
+            blocks.extend(group)
+
+        if page_idx == total - 1:
+            blocks.append(footer)
+
+        all_messages.append(blocks)
+
+    return all_messages

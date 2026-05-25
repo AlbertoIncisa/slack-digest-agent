@@ -27,6 +27,10 @@ features:
     - command: /digest-rescan
       description: Rescan all channels and refresh embeddings cache
       should_escape: true
+    - command: /digest-tune
+      description: Run theme tuning, view history, or revert changes
+      usage_hint: "[history|revert]"
+      should_escape: true
 
 oauth_config:
   scopes:
