@@ -6,7 +6,7 @@ import os
 import signal
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -258,6 +258,7 @@ def _run_digest(
     bot_client: WebClient | None = None,
     fixed_lookback_hours: int | None = None,
     workspace_url: str = "https://lovable-dev.slack.com",
+    triggered: bool = False,
 ) -> None:
     from slack_digest.config import get_config
 
@@ -285,9 +286,13 @@ def _run_digest(
     logger.info("Sending to Claude for synthesis...")
     digest = generate_digest(scored, cfg, stats, workspace_url)
 
-    blocks = format_digest_blocks(digest)
-    send_dm(bot_client, cfg.target_user.slack_id, blocks, text=digest.get("one_liner", "Your daily Slack digest"))
-    logger.info("Digest sent successfully")
+    digest_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    label = "On-demand Digest" if triggered else "Daily Digest"
+    block_messages = format_digest_blocks(digest, digest_run_id, label=label)
+    text = digest.get("one_liner", "Your daily Slack digest")
+    for blocks in block_messages:
+        send_dm(bot_client, cfg.target_user.slack_id, blocks, text=text)
+    logger.info(f"Digest sent successfully ({len(block_messages)} message(s))")
 
 
 def main() -> None:
@@ -315,8 +320,8 @@ def main() -> None:
     # Warm up the embedding model at startup
     MessageScorer(config)
 
-    def digest_callback(override_config: DigestConfig | None = None, fixed_lookback_hours: int | None = None):
-        _run_digest(override_config, reader_client, bot_client, fixed_lookback_hours, workspace_url)
+    def digest_callback(override_config: DigestConfig | None = None, fixed_lookback_hours: int | None = None, triggered: bool = False):
+        _run_digest(override_config, reader_client, bot_client, fixed_lookback_hours, workspace_url, triggered=triggered)
 
     scheduler = DigestScheduler(digest_callback, config)
     scheduler.start()

@@ -26,6 +26,15 @@ exclude_channels:
 
 include_channels: []
 
+scoring:
+  similarity_threshold: 0.25
+
+tuning:
+  auto_apply: false
+  min_votes: 10
+  cooldown_days: 3
+  pain_threshold: 0.3
+
 agent:
   model: claude-sonnet-4-6
   max_budget_usd: 0.50
