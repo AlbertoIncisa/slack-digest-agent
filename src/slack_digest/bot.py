@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 import threading
@@ -103,7 +104,7 @@ def create_app(
 
         channel = body["channel"]["id"]
         ts = body["message"]["ts"]
-        client.chat_update(channel=channel, ts=ts, blocks=new_blocks)
+        client.chat_update(channel=channel, ts=ts, blocks=new_blocks, text="Digest update")
 
         if active_vote is not None:
             cfg = get_config()
@@ -157,7 +158,7 @@ def create_app(
                 })
             else:
                 new_blocks.append(block)
-        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks)
+        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks, text="Tuning update")
 
     @app.action("tuning_dismiss")
     def handle_tuning_dismiss(ack, body, client):
@@ -177,7 +178,7 @@ def create_app(
                 })
             else:
                 new_blocks.append(block)
-        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks)
+        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks, text="Tuning update")
 
     @app.action(re.compile(".*"))
     def handle_other_actions(ack, body):
@@ -186,7 +187,7 @@ def create_app(
     @app.command("/digest-config")
     def handle_config(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if not text:
             cfg = get_config()
@@ -240,7 +241,7 @@ def create_app(
     @app.command("/digest-themes")
     def handle_themes(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if not text:
             cfg = get_config()
@@ -281,7 +282,7 @@ def create_app(
     @app.command("/digest-people")
     def handle_people(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if not text:
             cfg = get_config()
@@ -322,7 +323,7 @@ def create_app(
     @app.command("/digest-now")
     def handle_digest_now(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if text:
             try:
@@ -349,7 +350,7 @@ def create_app(
     @app.command("/digest-tune")
     def handle_tune(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip().lower()
+        text = html.unescape(command.get("text") or "").strip().lower()
         cfg = get_config()
         target_user_id = cfg.target_user.slack_id
 
