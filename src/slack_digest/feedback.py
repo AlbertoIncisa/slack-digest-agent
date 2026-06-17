@@ -5,7 +5,7 @@ import logging
 import os
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,23 @@ def has_pending_proposal() -> bool:
     conn = _get_conn()
     row = conn.execute("SELECT 1 FROM tuning_log WHERE status = 'pending' LIMIT 1").fetchone()
     return row is not None
+
+
+def expire_stale_proposals(max_age_days: int) -> int:
+    """Mark pending proposals older than max_age_days as 'expired' so they stop
+    blocking new tuning runs. Returns the number expired."""
+    conn = _get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE tuning_log SET status = 'expired', dismissed_at = ? "
+        "WHERE status = 'pending' AND run_date < ?",
+        (now, cutoff),
+    )
+    conn.commit()
+    if cursor.rowcount:
+        logger.info(f"Expired {cursor.rowcount} stale pending proposal(s) older than {max_age_days}d")
+    return cursor.rowcount
 
 
 def insert_tuning_log(

@@ -10,6 +10,7 @@ import anthropic
 
 from slack_digest.config import Theme, get_config, save_config
 from slack_digest.feedback import (
+    expire_stale_proposals,
     get_last_tuning_run_date,
     get_unprocessed_votes,
     has_pending_proposal,
@@ -260,6 +261,7 @@ def maybe_run(
         config = get_config()
         tuning = config.tuning
 
+        expire_stale_proposals(tuning.cooldown_days)
         if has_pending_proposal():
             return False
 
