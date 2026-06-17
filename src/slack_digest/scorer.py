@@ -65,6 +65,9 @@ class MessageScorer:
         self.theme_thresholds = {
             t.name: t.similarity_threshold for t in config.themes if t.similarity_threshold is not None
         }
+        self.channel_weights = {
+            k.lstrip("#"): float(v) for k, v in config.scoring.channel_weights.items()
+        }
 
         logger.info(f"Scorer ready — {len(self.theme_names)} themes embedded")
 
@@ -77,9 +80,16 @@ class MessageScorer:
 
         scored: list[ScoredMessage] = []
         for i, msg in enumerate(messages):
-            theme_scores: list[tuple[str, float]] = []
-            max_similarity = 0.0
+            # A channel weight of <= 0 is a hard mute — nothing from it surfaces.
+            channel_weight = self.channel_weights.get(msg.get("channel_name", "").lstrip("#"), 1.0)
+            if channel_weight <= 0:
+                continue
 
+            # --- Relevance gate ---
+            # A theme matches only if its raw cosine similarity clears that theme's
+            # threshold (per-theme, falling back to the global threshold). Priority
+            # and engagement play NO part in the gate — they only affect ranking.
+            matched: list[tuple[str, float]] = []
             if len(self.theme_embeddings) > 0:
                 similarities = msg_embeddings[i] @ self.theme_embeddings.T
                 for j, sim in enumerate(similarities):
@@ -87,37 +97,46 @@ class MessageScorer:
                     theme_name = self.theme_names[j]
                     threshold = self.theme_thresholds.get(theme_name, self.global_threshold)
                     if raw_sim > threshold:
-                        theme_scores.append((theme_name, raw_sim))
-                    priority = self.theme_priorities.get(theme_name, "medium")
-                    weighted = raw_sim * PRIORITY_MULTIPLIER.get(priority, 1.0)
-                    max_similarity = max(max_similarity, weighted)
+                        matched.append((theme_name, raw_sim))
 
-            reply_count = msg.get("reply_count", 0)
+            is_tracked = msg.get("user") in self.tracked_user_ids
+            if not matched and not is_tracked:
+                continue
+
+            # --- Ranking score (ordering only, never gating) ---
+            # relevance of the best-matching theme, weighted by that theme's
+            # priority, then scaled by engagement.
             engagement = 1.0
             engagement += min(sum(r.get("count", 0) for r in msg.get("reactions", [])) * REACTION_WEIGHT, 0.3)
+            reply_count = msg.get("reply_count", 0)
             if reply_count > 0:
                 engagement += 0.1 + min(reply_count * 0.01, 0.1)
             if len(msg.get("text", "")) > LENGTH_BONUS_THRESHOLD:
                 engagement += 0.05
 
-            is_tracked = msg.get("user") in self.tracked_user_ids
-            total = max_similarity * engagement
+            best_weighted = max(
+                (raw_sim * PRIORITY_MULTIPLIER.get(self.theme_priorities.get(name, "medium"), 1.0)
+                 for name, raw_sim in matched),
+                default=0.0,
+            )
+            # A soft channel weight (0 < w != 1) scales ranking only — it never
+            # overrides the theme gate above.
+            rank_score = best_weighted * engagement * channel_weight
             if is_tracked:
-                total = max(total, TRACKED_AUTHOR_BONUS)
+                rank_score = max(rank_score, TRACKED_AUTHOR_BONUS)
 
-            if total > self.global_threshold or is_tracked:
-                scored.append(ScoredMessage(
-                    channel_name=msg.get("channel_name", ""),
-                    channel_id=msg.get("channel_id", ""),
-                    author_name=msg.get("author_name", msg.get("user", "unknown")),
-                    author_id=msg.get("user", "unknown"),
-                    text=msg.get("text", ""),
-                    ts=msg["ts"],
-                    reply_count=msg.get("reply_count", 0),
-                    reactions=msg.get("reactions", []),
-                    score=total,
-                    matched_themes=sorted(theme_scores, key=lambda x: x[1], reverse=True),
-                ))
+            scored.append(ScoredMessage(
+                channel_name=msg.get("channel_name", ""),
+                channel_id=msg.get("channel_id", ""),
+                author_name=msg.get("author_name", msg.get("user", "unknown")),
+                author_id=msg.get("user", "unknown"),
+                text=msg.get("text", ""),
+                ts=msg["ts"],
+                reply_count=msg.get("reply_count", 0),
+                reactions=msg.get("reactions", []),
+                score=rank_score,
+                matched_themes=sorted(matched, key=lambda x: x[1], reverse=True),
+            ))
 
         scored.sort(key=lambda m: m.score, reverse=True)
         return scored[:TOP_N]
