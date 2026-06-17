@@ -36,6 +36,7 @@ class TargetUser(BaseModel):
 
 class ScoringConfig(BaseModel):
     similarity_threshold: float = 0.25
+    channel_weights: dict[str, float] = Field(default_factory=dict)
 
 
 class TuningConfig(BaseModel):
@@ -120,6 +121,24 @@ def remove_theme(name: str) -> DigestConfig:
     with _config_lock:
         config = get_config().model_copy(deep=True)
         config.themes = [t for t in config.themes if t.name != name]
+    save_config(config)
+    return config
+
+
+def set_channel_weight(name: str, weight: float) -> DigestConfig:
+    name = name.lstrip("#")
+    with _config_lock:
+        config = get_config().model_copy(deep=True)
+        config.scoring.channel_weights[name] = weight
+    save_config(config)
+    return config
+
+
+def clear_channel_weight(name: str) -> DigestConfig:
+    name = name.lstrip("#")
+    with _config_lock:
+        config = get_config().model_copy(deep=True)
+        config.scoring.channel_weights.pop(name, None)
     save_config(config)
     return config
 

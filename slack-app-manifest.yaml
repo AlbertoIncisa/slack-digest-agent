@@ -24,6 +24,10 @@ features:
       description: Manage tracked people
       usage_hint: "[add|remove] @user [reason]"
       should_escape: true
+    - command: /digest-channels
+      description: Mute, penalize, or boost channels in the digest
+      usage_hint: "[mute|set|clear] #channel [weight]"
+      should_escape: true
     - command: /digest-rescan
       description: Rescan all channels and refresh embeddings cache
       should_escape: true

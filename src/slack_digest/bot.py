@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import re
 import threading
@@ -15,10 +16,12 @@ from slack_digest.config import (
     Theme,
     add_person,
     add_theme,
+    clear_channel_weight,
     get_config,
     remove_person,
     remove_theme,
     save_config,
+    set_channel_weight,
 )
 
 if TYPE_CHECKING:
@@ -103,7 +106,7 @@ def create_app(
 
         channel = body["channel"]["id"]
         ts = body["message"]["ts"]
-        client.chat_update(channel=channel, ts=ts, blocks=new_blocks)
+        client.chat_update(channel=channel, ts=ts, blocks=new_blocks, text="Digest update")
 
         if active_vote is not None:
             cfg = get_config()
@@ -157,7 +160,7 @@ def create_app(
                 })
             else:
                 new_blocks.append(block)
-        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks)
+        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks, text="Tuning update")
 
     @app.action("tuning_dismiss")
     def handle_tuning_dismiss(ack, body, client):
@@ -177,7 +180,7 @@ def create_app(
                 })
             else:
                 new_blocks.append(block)
-        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks)
+        client.chat_update(channel=body["channel"]["id"], ts=body["message"]["ts"], blocks=new_blocks, text="Tuning update")
 
     @app.action(re.compile(".*"))
     def handle_other_actions(ack, body):
@@ -186,7 +189,7 @@ def create_app(
     @app.command("/digest-config")
     def handle_config(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if not text:
             cfg = get_config()
@@ -240,7 +243,7 @@ def create_app(
     @app.command("/digest-themes")
     def handle_themes(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if not text:
             cfg = get_config()
@@ -278,10 +281,58 @@ def create_app(
         else:
             respond(text="Usage: `/digest-themes [add|remove] ...`")
 
+    @app.command("/digest-channels")
+    def handle_channels(ack, respond, command):
+        ack()
+        text = html.unescape(command.get("text") or "").strip()
+
+        if not text:
+            cfg = get_config()
+            weights = cfg.scoring.channel_weights
+            if not weights:
+                respond(text="No channel weights set. Use `/digest-channels mute #channel`, "
+                             "`set #channel <0-5>`, or `clear #channel`.")
+                return
+            lines = []
+            for name, w in sorted(weights.items()):
+                label = "muted" if w <= 0 else ("boosted" if w > 1 else "penalized")
+                lines.append(f"• *#{name}* — {w:g} ({label})")
+            respond(text="\n".join(lines))
+            return
+
+        parts = text.split()
+        action = parts[0].lower()
+
+        if action == "mute" and len(parts) >= 2:
+            name = parts[1].lstrip("#")
+            set_channel_weight(name, 0.0)
+            respond(text=f"Muted *#{name}* — its messages will no longer surface.")
+
+        elif action == "set" and len(parts) >= 3:
+            name = parts[1].lstrip("#")
+            try:
+                weight = float(parts[2])
+            except ValueError:
+                respond(text="Usage: `/digest-channels set #channel <weight 0-5>`")
+                return
+            if not 0 <= weight <= 5:
+                respond(text="Weight must be between 0 and 5 (0 = mute, <1 = penalty, >1 = boost).")
+                return
+            set_channel_weight(name, weight)
+            respond(text=f"Set *#{name}* weight to {weight:g}.")
+
+        elif action == "clear" and len(parts) >= 2:
+            name = parts[1].lstrip("#")
+            clear_channel_weight(name)
+            respond(text=f"Cleared weight for *#{name}* (back to default 1.0).")
+
+        else:
+            respond(text="Usage: `/digest-channels [mute|set|clear] #channel [weight]`")
+
     @app.command("/digest-people")
     def handle_people(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if not text:
             cfg = get_config()
@@ -322,7 +373,7 @@ def create_app(
     @app.command("/digest-now")
     def handle_digest_now(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip()
+        text = html.unescape(command.get("text") or "").strip()
 
         if text:
             try:
@@ -349,7 +400,7 @@ def create_app(
     @app.command("/digest-tune")
     def handle_tune(ack, respond, command):
         ack()
-        text = (command.get("text") or "").strip().lower()
+        text = html.unescape(command.get("text") or "").strip().lower()
         cfg = get_config()
         target_user_id = cfg.target_user.slack_id
 
