@@ -31,6 +31,23 @@ The user receives a daily digest of Slack messages filtered by themes. Each \
 theme has a name, keywords (used for semantic similarity matching), a priority \
 level, and an optional similarity threshold.
 
+IMPORTANT — themes are inclusion-only. A message's score is the MAX over all \
+themes of (similarity x priority_multiplier), and it is shown only if that score \
+clears a threshold. Priority "low" still uses a positive multiplier (0.75) — it \
+does NOT suppress. There is no negative or suppressing theme. Therefore adding a \
+theme can only ever SURFACE MORE content matching it — never less. Adding a \
+low-priority theme to "capture" or "deprioritize" disliked content does the \
+OPPOSITE of what you intend: it makes that content match a theme and appear in \
+the digest.
+
+To reduce unwanted content, you must instead:
+- remove the keywords that are catching it from the over-broad existing theme(s), and/or
+- raise that theme's similarity_threshold, and/or
+- lower the priority of an existing theme that keeps matching unwanted items.
+NEVER use action "add" to suppress, capture, or deprioritize unwanted content. \
+Only "add" a theme when the user clearly wants MORE of a topic that no current \
+theme covers.
+
 You will receive:
 - The current theme configuration
 - The global similarity threshold
